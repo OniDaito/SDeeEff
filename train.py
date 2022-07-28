@@ -1,18 +1,15 @@
 from model import SDF
 from loader import TestSDF
 import torch
-import torch.optim as optim
+import torch.nn as nn
 import numpy as np
-import math
-import random
 import argparse
-import os
-import sys
 import pandas as pd
 
 
 def criterion(pred, target):
-    pass
+    loss = nn.L1Loss()
+    return loss(pred, target)  
 
 def train(args, model, optimiser, device):
     model.train()
@@ -44,9 +41,9 @@ def train(args, model, optimiser, device):
 
             optimiser.zero_grad()
             x = torch.tensor(coord, dtype=torch.float32, device=device)
-            target = loader.get_distance(coord)
+            target = loader.get_distance(coord).to(device=device)
             output = model(x)
-            loss = criterion(output, y)
+            loss = criterion(output, target)
             loss.backward()
             losses.append(loss.item())
             optimiser.step()
@@ -91,3 +88,10 @@ if __name__ == "__main__":
     print("Using device", device)
 
     # Initialise our models
+    model = SDF().to(device)
+    optimiser = torch.optim.Adam(model.parameters())
+    print(model)
+
+    # now train
+    train(args, model, optimiser, device)
+    print("Done")
