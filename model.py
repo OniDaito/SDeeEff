@@ -6,8 +6,7 @@
 
 Author : Benjamin Blundell - me@benjamin.computer
 
-sdf.net - the core of the SDF program
-
+model.net - our sine mlp representation of an SDF
 """
 
 import torch
@@ -17,9 +16,10 @@ import torch.nn.functional as F
 
 
 class SDF(nn.Module):
+    """ Input is an X, Y, Z co-ordinate. Output is a distance. """
     def __init__(self):
         super(SDF, self).__init__()
-        self.layer0 = nn.Linear(10, 10)
+        self.layer0 = nn.Linear(3, 10)
         self.layer1 = nn.Linear(10, 10)
         self.layer2 = nn.Linear(10, 10)
         self.layer3 = nn.Linear(10, 1)
