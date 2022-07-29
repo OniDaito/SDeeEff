@@ -37,8 +37,8 @@ class SDF(nn.Module):
         y = self.layer5(y)
         return y
 
-    def get_distance(self, coord):
+    def get_distance(self, coord, device):
         assert(len(coord) == 3)
-        coord = torch.tensor([coord[0], coord[1], coord[2]], dtype=torch.float32)
+        coord = torch.tensor([coord[0], coord[1], coord[2]], dtype=torch.float32, device=device)
         res = self.forward(coord)
         return float(res[0])
