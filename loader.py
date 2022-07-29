@@ -47,6 +47,17 @@ class TestSDF():
 
         return torch.tensor([d], dtype=torch.float32)
 
+    def get_volume(self, coords):
+        if not hasattr(self, 'volume'):
+            volume = torch.zeros([len(coords)])
+            
+            for step, coord in enumerate(coords):
+                d = self.get_distance(coord)[0]
+                volume[step] = d
+
+            self.volume = volume
+        return self.volume
+
 
 '''
 train_data = pd.read_csv('data/train.csv').values
