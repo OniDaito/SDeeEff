@@ -18,53 +18,60 @@ import argparse
 import pandas as pd
 import random
 from tqdm import tqdm
-
+from tkinter import Tk
+from viz import SDFView
 
 def criterion(pred, target):
     loss = nn.L1Loss()
+    #loss = nn.MSELoss()
     return loss(pred, target)  
 
 def train(args, model, optimiser, device):
     model.train()
     loader = TestSDF()
+    losses = []
 
-    # Divide up the space by rez -1, to -1
-    # TODO - would random sampling be better?
-    num_samples = 2000
+    coords = []
+
+    for i in range(args.samples):
+        x = random.random() * 2.0 - 1.0
+        y = random.random() * 2.0 - 1.0
+        z = random.random() * 2.0 - 1.0
+        # x = random.gauss(0.0, 0.2)
+        # y = random.gauss(0.0, 0.2)
+        # z = random.gauss(0.0, 0.2)
+        coords.append((x, y, z))
 
     for epoch in range(args.epochs):
-        losses = []
-        coords = []
 
-        for i in range(num_samples):
-            x = random.random() * 2.0 - 1.0
-            y = random.random() * 2.0 - 1.0
-            z = random.random() * 2.0 - 1.0
-            coords.append((x, y, z))
+      
     
         #for batch_num, input_data in enumerate(train_loader):
-        target = loader.get_volume(coords).to(device=device)
+        #target = loader.get_volume(coords).to(device=device)
 
         # Create a volume we shall fill
-        pred = torch.zeros([len(coords)], dtype=torch.float32, device=device)
+        #pred = torch.zeros([len(coords)], dtype=torch.float32, device=device)
 
         # Loop over the SDF space in discrete steps 
-        for step, coord in tqdm(enumerate(coords)):
+        for step, coord in enumerate(coords):
             optimiser.zero_grad()
             x = torch.tensor(coord, dtype=torch.float32, device=device)
+            target = loader.get_distance(coord).to(device=device)
+
             output = model(x)
-            pred[step] = output
+            #pred[step] = output
 
-        # print(pred, target)
-        loss = criterion(pred, target)
-        loss.backward()
-        losses.append(loss.item())
-        optimiser.step()
+            # print(pred, target)
+            loss = criterion(output, target)
+            loss.backward()
+            losses.append(loss.item())
+      
+            optimiser.step()
 
-        #if batch_num % 40 == 0:
-        #batch_num = 0
-        #print('\tEpoch %d | Batch %d | Loss %6.2f' % (epoch, batch_num, loss.item()))
-        print('Epoch %d | Loss %6.2f' % (epoch, sum(losses)/len(losses)))
+            #if batch_num % 40 == 0:
+            #batch_num = 0
+            #print('\tEpoch %d | Batch %d | Loss %6.2f' % (epoch, batch_num, loss.item()))
+        print('Epoch %d | Loss %6.2f' % (epoch, sum(losses) / len(losses)))
 
 
 if __name__ == "__main__":
@@ -73,14 +80,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--epochs",
         type=int,
-        default=10,
-        help="number of epochs to train (default: 10)",
+        default=50,
+        help="number of epochs to train (default: 100)",
     )
     parser.add_argument(
         "--lr",
         type=float,
-        default=0.004,
-        help="learning rate (default: 0.004)",
+        default=0.001,
+        help="learning rate (default: 0.001)",
     )
     parser.add_argument(
         "--seed", type=int, default=1, metavar="S", help="random seed (default: 1)"
@@ -88,8 +95,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--rez",
         type=int,
-        default=64,
+        default=128,
         help="How many voxels along each dimension from -1 to 1 (default: 64)",
+    )
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=500,
+        help="How many samples of the volume to take for each train datum (default: 500)",
     )
     parser.add_argument(
         "--no-cuda", action="store_true", default=False, help="disables CUDA training"
@@ -106,7 +119,13 @@ if __name__ == "__main__":
     model = SDF().to(device)
     optimiser = torch.optim.Adam(model.parameters())
     print(model)
-
     # now train
     train(args, model, optimiser, device)
-    print("Done")
+    print("Training Done")
+    model = model.to('cpu')
+    model.eval()
+
+    root = Tk()
+    ex = SDFView(root, model, rez=args.rez)
+    root.geometry(str(args.rez) + "x" + str(args.rez))
+    root.mainloop()

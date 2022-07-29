@@ -51,8 +51,8 @@ class SDFView(Frame):
         self.canvas.pack()
 
     def raycast(self, field):
-        # assume eye at 0
-       
+        # assume eye at 0, 0, 0
+        
         for coord in self.screen_coords:
             dx = coord[0]
             dy = coord[1]
@@ -72,6 +72,7 @@ class SDFView(Frame):
                 if d < RAYSILON:
                     # we've hit something
                     self.raster[sy][sx] = 100
+                    break
         
     def draw(self):
         return " ".join((("{"+" ".join(self.palette[ self.raster[j][i] ] for i in range(self.rez)))+"}" for j in range(self.rez)))
