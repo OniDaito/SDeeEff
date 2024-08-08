@@ -1,140 +1,168 @@
-"""                           
- _____ ___           _____ ___ ___  # noqa
-|   __|    \ ___ ___|   __|  _|  _| # noqa
-|__   |  |  | -_| -_|   __|  _|  _| # noqa
-|_____|____/|___|___|_____|_| |_|   # noqa
+""" A program based on Blackle Mori's work on the SDF fields."""
 
-Author : Benjamin Blundell - me@benjamin.computer
-
-train.py - train our MLP
-
-https://medium.com/deep-learning-study-notes/multi-layer-perceptron-mlp-in-pytorch-21ea46d50e62
-"""
-
-from model import SDF
-from loader import TestSDF
 import torch
-import torch.nn as nn
-import argparse
-from tkinter import Tk
-from tqdm import tqdm
-from tkinter import Tk
-from viz import SDFView
-from loader import SDFDataset
-from torch.utils.data import DataLoader
+from torch import nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset
+import os
+from math import sqrt
+from PIL import Image
+from torchvision.transforms import Resize, Compose, ToTensor, Normalize
+import numpy as np
+import skimage
+import matplotlib.pyplot as plt
+from collections import OrderedDict
+import time
+from mesh_to_sdf import get_surface_point_cloud
+from mesh_to_sdf.utils import sample_uniform_points_in_unit_sphere
 
-def criterion(pred, target):
-    loss = nn.L1Loss()
-    #loss = nn.MSELoss()
-    return loss(pred, target)  
-
-
-def create_data(args):
-    field = TestSDF()
-
-    train_data = torch.tensor(field.random_sample(args.samples))
-    test_data  = torch.tensor(field.random_sample(100))
-
-    print(train_data.shape)
-    print(test_data.shape)
-
-    train_set = SDFDataset(train_data)
-    test_set  = SDFDataset(test_data)
-
-    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
-    test_loader  = DataLoader(test_set,  batch_size=args.batch_size, shuffle=False)
-
-    return train_loader, test_loader
+import trimesh
+import pyrender
+import re
 
 
-def train(args, model, train_loader, optimiser, viewer, device):
-    model.train()
-    losses = []
-
-    for epoch in range(args.epochs):
-
-        for batch_num, input_data in enumerate(train_loader):
-            optimiser.zero_grad()
-            x, y = input_data
-            x = x.to(device)
-            y = y.to(device).squeeze()
-            output = model(x).squeeze()
-            loss = criterion(output, y)
-            loss.backward()
-            losses.append(loss.item())
-            optimiser.step()
-
-            #if batch_num % 40 == 0:
-            #batch_num = 0
-            #print('\tEpoch %d | Batch %d | Loss %6.2f' % (epoch, batch_num, loss.item()))
-        print('Epoch %d | Loss %6.2f' % (epoch, sum(losses) / len(losses)))
-
-        model.eval()
-        viewer.raycast(model, device)
-        viewer.update()
-        model.train()
+def get_mgrid(sidelen, dim=2):
+    '''Generates a flattened grid of (x,y,...) coordinates in a range of -1 to 1.
+    sidelen: int
+    dim: int'''
+    tensors = tuple(dim * [torch.linspace(-1, 1, steps=sidelen)])
+    mgrid = torch.stack(torch.meshgrid(*tensors), dim=-1)
+    mgrid = mgrid.reshape(-1, dim)
+    return mgrid
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SDF Train")
 
-    parser.add_argument(
-        "--epochs",
-        type=int,
-        default=50,
-        help="number of epochs to train (default: 100)",
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=16,
-        help="Batch size (default: 16)",
-    )
-    parser.add_argument(
-        "--lr",
-        type=float,
-        default=0.001,
-        help="learning rate (default: 0.001)",
-    )
-    parser.add_argument(
-        "--seed", type=int, default=1, metavar="S", help="random seed (default: 1)"
-    )
-    parser.add_argument(
-        "--rez",
-        type=int,
-        default=128,
-        help="How many voxels along each dimension from -1 to 1 (default: 64)",
-    )
-    parser.add_argument(
-        "--samples",
-        type=int,
-        default=500,
-        help="How many samples of the volume to take for each train datum (default: 500)",
-    )
-    parser.add_argument(
-        "--no-cuda", action="store_true", default=False, help="disables CUDA training"
-    )
 
-    args = parser.parse_args()
+class SDFFitting(Dataset):
+    def __init__(self, filename, samples):
+        super().__init__()
+        mesh = trimesh.load(filename)
+        #mesh, number_of_points = 500000, surface_point_method='scan', sign_method='normal', scan_count=100, scan_resolution=400, sample_point_count=10000000, normal_sample_count=11, min_size=0
+        surface_point_cloud = get_surface_point_cloud(mesh, surface_point_method='sample')
 
-    use_cuda = not args.no_cuda and torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
-    kwargs = {"num_workers": 1, "pin_memory": True} if use_cuda else {}
-    print("Using device", device)
+        self.coords, self.samples = surface_point_cloud.sample_sdf_near_surface(samples//2, use_scans=False, sign_method='normal')
+        unit_sphere_points = sample_uniform_points_in_unit_sphere(samples//2)
+        samples = surface_point_cloud.get_sdf_in_batches(unit_sphere_points, use_depth_buffer=False)
+        self.coords = np.concatenate([self.coords, unit_sphere_points]).astype(np.float32)
+        self.samples = np.concatenate([self.samples, samples]).astype(np.float32)
+        
+        #colors = np.zeros(self.coords.shape)
+        #colors[self.samples < 0, 2] = 1
+        #colors[self.samples > 0, 0] = 1
+        #cloud = pyrender.Mesh.from_points(self.coords, colors=colors)
+        #scene = pyrender.Scene()
+        #scene.add(cloud)
+        #viewer = pyrender.Viewer(scene, use_raymond_lighting=True, point_size=2)
 
-    # Create the starting window
-    root = Tk()
-    viewer = SDFView(root, rez=args.rez)
-    root.geometry(str(args.rez) + "x" + str(args.rez))
+        self.samples = torch.from_numpy(self.samples)[:,None]
+        self.coords = torch.from_numpy(self.coords)
+        print(self.coords.shape, self.samples.shape)
+    def __len__(self):
+        return 1
 
-    # Create the data
-    train_loader, test_loader = create_data(args)
+    def __getitem__(self, idx):    
+        if idx > 0: raise IndexError
+            
+        return self.coords, self.samples
+    
+sdf = SDFFitting("bunny2.obj", 256*256*4)
+sdfloader = DataLoader(sdf, batch_size=1, pin_memory=False, num_workers=0)
 
-    # Initialise our models
-    model = SDF().to(device)
-    optimiser = torch.optim.Adam(model.parameters())
-    print(model)
 
-    # now train
-    train(args, model, train_loader, optimiser, viewer, device)
-    root.mainloop()
+def dump_data(dat):
+  dat = dat.cpu().detach().numpy()
+  return dat
+
+def print_vec4(ws):
+  vec = "vec4(" + ",".join(["{0:.2f}".format(w) for w in ws]) + ")"
+  vec = re.sub(r"\b0\.", ".", vec)
+  return vec
+
+def print_mat4(ws):
+  mat = "mat4(" + ",".join(["{0:.2f}".format(w) for w in np.transpose(ws).flatten()]) + ")"
+  mat = re.sub(r"\b0\.", ".", mat)
+  return mat
+
+def serialize_to_shadertoy(siren, varname):
+  #first layer
+  omega = siren.omega
+  chunks = int(siren.hidden_features/4)
+  lin = siren.net[0] if siren.first_linear else siren.net[0].linear
+  in_w = dump_data(lin.weight)
+  in_bias = dump_data(lin.bias)
+  om = 1 if siren.first_linear else omega
+  for row in range(chunks):
+    if siren.first_linear:
+        line = "vec4 %s0_%d=(" % (varname, row)
+    else:
+        line = "vec4 %s0_%d=sin(" % (varname, row)
+
+    for ft in range(siren.in_features):
+        feature = x_vec = in_w[row*4:(row+1)*4,ft]*om
+        line += ("p.%s*" % ["y","z","x"][ft]) + print_vec4(feature) + "+"
+    bias = in_bias[row*4:(row+1)*4]*om
+    line += print_vec4(bias) + ");"
+    print(line)
+
+  #hidden layers
+  for layer in range(siren.hidden_layers):
+    layer_w = dump_data(siren.net[layer+1].linear.weight)
+    layer_bias = dump_data(siren.net[layer+1].linear.bias)
+    for row in range(chunks):
+      line = ("vec4 %s%d_%d" % (varname, layer+1, row)) + "=sin("
+      for col in range(chunks):
+        mat = layer_w[row*4:(row+1)*4,col*4:(col+1)*4]*omega
+        line += print_mat4(mat) + ("*%s%d_%d"%(varname, layer, col)) + "+\n    "
+      bias = layer_bias[row*4:(row+1)*4]*omega
+      line += print_vec4(bias)+")/%0.1f+%s%d_%d;"%(sqrt(layer+1), varname, layer, row)
+      print(line)
+
+  #output layer
+  out_w = dump_data(siren.net[-1].weight)
+  out_bias = dump_data(siren.net[-1].bias)
+  for outf in range(siren.out_features):
+    line = "return "
+    for row in range(chunks):
+      vec = out_w[outf,row*4:(row+1)*4]
+      line += ("dot(%s%d_%d,"%(varname, siren.hidden_layers, row)) + print_vec4(vec) + ")+\n    "
+    print(line + "{:0.3f}".format(out_bias[outf])+";")
+
+
+def train_siren(dataloader, hidden_features, hidden_layers, omega):
+  model_input, ground_truth = next(iter(dataloader))
+  model_input, ground_truth = model_input.cuda(), ground_truth.cuda()
+
+  img_curr = Siren(in_features=3, out_features=1, hidden_features=hidden_features, 
+                   hidden_layers=hidden_layers, outermost_linear=True, omega=omega, first_linear=False)
+  img_curr.cuda()
+  #optim = torch.optim.Adagrad(params=img_curr.parameters())
+  #optim = torch.optim.Adam(lr=1e-3, params=img_curr.parameters())
+  optim = torch.optim.Adam(lr=1e-4, params=img_curr.parameters(), weight_decay=.01)
+  perm = torch.randperm(model_input.size(1))
+
+  total_steps = 20000
+  update = int(total_steps/50)
+  batch_size = 256*256
+  for step in range(total_steps):
+    if step == 500:
+        optim.param_groups[0]['weight_decay'] = 0.
+    idx = step % int(model_input.size(1)/batch_size)
+    model_in = model_input[:,perm[batch_size*idx:batch_size*(idx+1)],:]
+    truth = ground_truth[:,perm[batch_size*idx:batch_size*(idx+1)],:]
+    model_output, coords = img_curr(model_in)
+
+    loss = (model_output - truth)**2
+    loss = loss.mean()
+
+    optim.zero_grad()
+    loss.backward()
+    optim.step()
+           
+    if (step % update) == update-1:
+      perm = torch.randperm(model_input.size(1))
+      print("Step %d, Current loss %0.6f" % (step, loss))
+
+  return img_curr
+
+sdf_siren = train_siren(sdfloader, 16, 2, 15)
+serialize_to_shadertoy(sdf_siren, "f")

@@ -1,7 +1,12 @@
 # SDeeEff - A PyTorch SDF learner
 
-A program that learns to approximate an SDF using pytorch. Based on the following:
+A set of programs that learn to approximate an SDF using pytorch. Based on the following:
 
 * [https://www.vincentsitzmann.com/siren/](https://www.vincentsitzmann.com/siren/)
 * [https://ieeexplore.ieee.org/document/8954065/](https://ieeexplore.ieee.org/document/8954065/)
 * [https://www.shadertoy.com/view/wtVyWK](https://www.shadertoy.com/view/wtVyWK)
+* Work by [https://www.youtube.com/@suricrasia](blackle mori)
+
+## Requirements
+
+*[https://pypi.org/project/mesh-to-sdf/](https://pypi.org/project/mesh-to-sdf/)
