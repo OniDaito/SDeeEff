@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from math import sqrt
 import numpy as np
-from mesh_to_sdf import get_surface_point_cloud
+from mesh_to_sdf import get_surface_point_cloud, sample_sdf_near_surface
 from mesh_to_sdf.utils import sample_uniform_points_in_unit_sphere, scale_to_unit_sphere
 import trimesh
 import re
@@ -24,22 +24,42 @@ from model import Siren
 import argparse
 
 
+# Overriding for non-unit sphere
+def sample_uniform_points_in_sphere(amount, radius):
+    sphere_points = np.random.uniform(-radius, radius, size=(amount * 2 + 20, 3))
+    sphere_points = sphere_points[np.linalg.norm(sphere_points, axis=1) < radius] # radius was 1
+
+    points_available = sphere_points.shape[0]
+    if points_available < amount:
+        # This is a fallback for the rare case that too few points are inside the unit sphere
+        result = np.zeros((amount, 3))
+        result[:points_available, :] = sphere_points
+        result[points_available:, :] = sample_uniform_points_in_sphere(amount - points_available, radius)
+        return result
+    else:
+        return sphere_points[:amount, :]
+
+
 class SDFFitting(Dataset):
-    def __init__(self, filename, samples):
+    def __init__(self, filename, num_samples, unit=False):
         super().__init__()
         mesh = trimesh.load(filename)
 
-        #mesh = scale_to_unit_sphere(mesh) # Our meshes might be bigger? Of course, we might loose detail at this scale thanks to floating point res.
+        if unit:
+            mesh = scale_to_unit_sphere(mesh) # Our meshes might be bigger? Of course, we might loose detail at this scale thanks to floating point res.
+        
         # mesh, number_of_points = 500000, surface_point_method='scan', sign_method='normal', scan_count=100, scan_resolution=400, sample_point_count=10000000, normal_sample_count=11, min_size=0
         surface_point_cloud = get_surface_point_cloud(
             mesh, surface_point_method="sample"
         )
-        
+
+        #self.coords, self.samples = sample_sdf_near_surface(mesh, number_of_points=num_samples // 2)
 
         self.coords, self.samples = surface_point_cloud.sample_sdf_near_surface(
-            samples // 2, use_scans=False, sign_method="normal"
+            num_samples // 2, use_scans=False, sign_method="normal"
         )
-        unit_sphere_points = sample_uniform_points_in_unit_sphere(samples // 2)
+        
+        unit_sphere_points = sample_uniform_points_in_sphere(num_samples, 10.0)
         samples = surface_point_cloud.get_sdf_in_batches(
             unit_sphere_points, use_depth_buffer=False
         )
@@ -67,15 +87,17 @@ def dump_data(dat):
 
 
 def print_vec4(ws):
-    vec = "vec4(" + ",".join(["{0:.2f}".format(w) for w in ws]) + ")"
+    # Can set .2. or .3 if we like?
+    vec = "vec4(" + ",".join(["{0:.3f}".format(w) for w in ws]) + ")"
     vec = re.sub(r"\b0\.", ".", vec)
     return vec
 
 
 def print_mat4(ws):
+    # Can set .2. or .3 if we like?
     mat = (
         "mat4("
-        + ",".join(["{0:.2f}".format(w) for w in np.transpose(ws).flatten()])
+        + ",".join(["{0:.3f}".format(w) for w in np.transpose(ws).flatten()])
         + ")"
     )
     mat = re.sub(r"\b0\.", ".", mat)
@@ -181,7 +203,7 @@ def train_siren(
     # optim = torch.optim.Adagrad(params=img_curr.parameters())
     # optim = torch.optim.Adam(lr=1e-3, params=img_curr.parameters())
     optim = torch.optim.Adam(
-        lr=learning_rate, params=img_curr.parameters(), weight_decay=0.01
+        lr=learning_rate, params=img_curr.parameters(), weight_decay=0.01 # was 0.01
     )
     perm = torch.randperm(model_input.size(1))
 
@@ -191,8 +213,8 @@ def train_siren(
     scheduler = ExponentialLR(optim, gamma=0.9)
 
     for step in range(total_steps):
-        if step == 500:
-            optim.param_groups[0]["weight_decay"] = 0.0
+        #if step == 500:
+        #    optim.param_groups[0]["weight_decay"] = 0.0
 
         idx = step % int(model_input.size(1) / batch_size)
         model_in = model_input[:, perm[batch_size * idx : batch_size * (idx + 1)], :]
@@ -210,7 +232,7 @@ def train_siren(
             lr = get_lr(optim)
             perm = torch.randperm(model_input.size(1))
             print("Step %d, Current loss %0.6f, lr %0.6f" % (step, loss, lr))
-            scheduler.step()
+            #scheduler.step()
 
     return img_curr
 
@@ -231,6 +253,6 @@ if __name__ == "__main__":
     sdf_siren = train_siren(
         sdfloader, 16, 4, 15, total_steps=args.steps, learning_rate=args.lr, load_dict=args.load
     )
-    torch.save(sdf_siren.state_dict(), "latest_model.pt")
 
+    torch.save(sdf_siren.state_dict(), "latest_model.pt")
     serialize_to_glsl(sdf_siren, "f")
