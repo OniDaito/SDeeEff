@@ -2,9 +2,11 @@
 
 A set of Python PyTorch programs to create a Signed Distance Field (SDF), for use with a raymarching GLSL shader.
 
-A neural network - Siren - is trained on a particular .obj file. This object is repeatedly sampled by the program, using the mesh-to-sdf library. Points in the space are sampled with this library, returning the distance to the object's surface. The network learns the distance from the sampled point, until all we need is the network weights to estimate our SDF.
+A neural network - Siren - is trained on a particular .obj mesh file. This object is repeatedly sampled by the program, using the mesh-to-sdf library. Points in the space are sampled with this library, returning the distance to the object's surface. The network learns the distance from the sampled point, until all we need is the network weights to estimate our SDF.
 
 The weights are then exported as text, which can be pasted into the sdf.glsl file included. Or, if you prefer, one can use ShaderToy or PoshBrolly to view the SDF.
+
+The majority of this work is based on the work of [Blackle Mori](https://github.com/blackle).
 
 Based on the following:
 * [https://procegen.konstantinmagnus.de/neural-network-sdfs](https://procegen.konstantinmagnus.de/neural-network-sdfs)
@@ -31,12 +33,8 @@ The main libraries are PyTorch and mesh-to-sdf.
 
 To train, go with:
 
-    python train.py --obj gormley4.obj 
+    python train.py --obj <path to object file> 
 
-Then cut and paste the result into the sdf.glsl
+The *current_fragment.glsl* will contain the final network and a shader to visualise it. 
 
-I use glslCanvas in vscode to look at the SDF. Seems like it works alright. ctrl-shift-p to run it. 
-
-## Currently
-
-Gormley5.obj is no longer unit sized. I commented out the bit to get it all into a unit sphere as I think that might be causing detail issues. Trying to expand out a bit.
+There are a number of options you can take a look at, at the bottom of the train.py script. I've found the defaults seem to work best.

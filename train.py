@@ -9,76 +9,14 @@ https://github.com/marian42/mesh_to_sdf
 
 import torch
 import os
-from torch import nn
 from torch.optim.lr_scheduler import ExponentialLR
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
-
+from torch.utils.data import DataLoader
 from math import sqrt
 import numpy as np
-from mesh_to_sdf import get_surface_point_cloud, sample_sdf_near_surface
-from mesh_to_sdf.utils import sample_uniform_points_in_unit_sphere, scale_to_unit_sphere
-import trimesh
 import re
 from model import Siren
 import argparse
-
-
-# Overriding for non-unit sphere
-def sample_uniform_points_in_sphere(amount, radius):
-    sphere_points = np.random.uniform(-radius, radius, size=(amount * 2 + 20, 3))
-    sphere_points = sphere_points[np.linalg.norm(sphere_points, axis=1) < radius] # radius was 1
-
-    points_available = sphere_points.shape[0]
-    if points_available < amount:
-        # This is a fallback for the rare case that too few points are inside the unit sphere
-        result = np.zeros((amount, 3))
-        result[:points_available, :] = sphere_points
-        result[points_available:, :] = sample_uniform_points_in_sphere(amount - points_available, radius)
-        return result
-    else:
-        return sphere_points[:amount, :]
-
-
-class SDFFitting(Dataset):
-    def __init__(self, filename, num_samples, unit=False):
-        super().__init__()
-        mesh = trimesh.load(filename)
-
-        if unit:
-            mesh = scale_to_unit_sphere(mesh) # Our meshes might be bigger? Of course, we might loose detail at this scale thanks to floating point res.
-        
-        # mesh, number_of_points = 500000, surface_point_method='scan', sign_method='normal', scan_count=100, scan_resolution=400, sample_point_count=10000000, normal_sample_count=11, min_size=0
-        surface_point_cloud = get_surface_point_cloud(
-            mesh, surface_point_method="sample"
-        )
-
-        #self.coords, self.samples = sample_sdf_near_surface(mesh, number_of_points=num_samples // 2)
-
-        self.coords, self.samples = surface_point_cloud.sample_sdf_near_surface(
-            num_samples // 2, use_scans=False, sign_method="normal"
-        )
-        
-        unit_sphere_points = sample_uniform_points_in_sphere(num_samples, 10.0)
-        samples = surface_point_cloud.get_sdf_in_batches(
-            unit_sphere_points, use_depth_buffer=False
-        )
-        self.coords = np.concatenate([self.coords, unit_sphere_points]).astype(
-            np.float32
-        )
-        self.samples = np.concatenate([self.samples, samples]).astype(np.float32)
-        self.samples = torch.from_numpy(self.samples)[:, None]
-        self.coords = torch.from_numpy(self.coords)
-        print(self.coords.shape, self.samples.shape)
-
-    def __len__(self):
-        return 1
-
-    def __getitem__(self, idx):
-        if idx > 0:
-            raise IndexError
-
-        return self.coords, self.samples
+from mesh import SDFFitting
 
 
 def dump_data(dat):
@@ -88,7 +26,7 @@ def dump_data(dat):
 
 def print_vec4(ws):
     # Can set .2. or .3 if we like?
-    vec = "vec4(" + ",".join(["{0:.3f}".format(w) for w in ws]) + ")"
+    vec = "vec4(" + ",".join(["{:.2f}".format(w) for w in ws]) + ")"
     vec = re.sub(r"\b0\.", ".", vec)
     return vec
 
@@ -97,7 +35,7 @@ def print_mat4(ws):
     # Can set .2. or .3 if we like?
     mat = (
         "mat4("
-        + ",".join(["{0:.3f}".format(w) for w in np.transpose(ws).flatten()])
+        + ",".join(["{:.2f}".format(w) for w in np.transpose(ws).flatten()])
         + ")"
     )
     mat = re.sub(r"\b0\.", ".", mat)
@@ -115,6 +53,8 @@ def serialize_to_glsl(siren, varname):
     in_bias = dump_data(lin.bias)
     om = 1 if siren.first_linear else omega
 
+    output_string = ""
+
     for row in range(chunks):
         if siren.first_linear:
             line = "vec4 %s0_%d=(" % (varname, row)
@@ -127,7 +67,7 @@ def serialize_to_glsl(siren, varname):
 
         bias = in_bias[row * 4 : (row + 1) * 4] * om
         line += print_vec4(bias) + ");"
-        print(line)
+        output_string += line
 
     # hidden layers
     for layer in range(siren.hidden_layers):
@@ -150,7 +90,7 @@ def serialize_to_glsl(siren, varname):
                 layer,
                 row,
             )
-            print(line)
+            output_string += line
 
     # output layer
     out_w = dump_data(siren.net[-1].weight)
@@ -167,26 +107,35 @@ def serialize_to_glsl(siren, varname):
                 + ")+\n    "
             )
 
-        print(line + "{:0.3f}".format(out_bias[outf]) + ";")
+        output_string += line + "{:0.3f}".format(out_bias[outf]) + ";"
+
+    return output_string
+
 
 def get_lr(optimizer):
     for param_group in optimizer.param_groups:
-        return param_group['lr']
+        return param_group["lr"]
+
 
 def train_siren(
     dataloader,
     hidden_features,
     hidden_layers,
     omega,
-    total_steps=20000,
-    learning_rate=1e-4,
-    load_dict=""
+    total_steps=200000,
+    learning_rate=5e-4,
+    load_dict="",
+    sched=False,
+    interval=100,
+    batch_size=65536,
+    weight_decay=0.01,
+    decay_interval=5000
 ):
     """Train a new siren model on the new model we've loaded."""
     model_input, ground_truth = next(iter(dataloader))
     model_input, ground_truth = model_input.cuda(), ground_truth.cuda()
 
-    img_curr = Siren(
+    model = Siren(
         in_features=3,
         out_features=1,
         hidden_features=hidden_features,
@@ -197,29 +146,27 @@ def train_siren(
     )
 
     if os.path.exists(load_dict):
-        img_curr.load_state_dict(torch.load(load_dict))
+        model.load_state_dict(torch.load(load_dict))
 
-    img_curr.cuda()
-    # optim = torch.optim.Adagrad(params=img_curr.parameters())
+    model = model.cuda()
+    #optim = torch.optim.Adagrad(lr=learning_rate, params=img_curr.parameters())
     # optim = torch.optim.Adam(lr=1e-3, params=img_curr.parameters())
     optim = torch.optim.Adam(
-        lr=learning_rate, params=img_curr.parameters(), weight_decay=0.01 # was 0.01
+        lr=learning_rate, params=model.parameters(), weight_decay=weight_decay 
     )
+
     perm = torch.randperm(model_input.size(1))
-
-    update = int(total_steps / 50)
-    batch_size = 256 * 256
-
-    scheduler = ExponentialLR(optim, gamma=0.9)
+    scheduler = ExponentialLR(optim, gamma=0.999)
+    best_loss = 1.0
 
     for step in range(total_steps):
-        #if step == 500:
-        #    optim.param_groups[0]["weight_decay"] = 0.0
+        if step == decay_interval:
+            optim.param_groups[0]["weight_decay"] = 0.0
 
         idx = step % int(model_input.size(1) / batch_size)
         model_in = model_input[:, perm[batch_size * idx : batch_size * (idx + 1)], :]
         truth = ground_truth[:, perm[batch_size * idx : batch_size * (idx + 1)], :]
-        model_output, coords = img_curr(model_in)
+        model_output, coords = model(model_in)
 
         loss = (model_output - truth) ** 2
         loss = loss.mean()
@@ -228,31 +175,79 @@ def train_siren(
         loss.backward()
         optim.step()
 
-        if (step % update) == update - 1:
+        if (step % interval) == interval - 1:
+
+            if loss < best_loss:
+                best_loss = loss
+                torch.save(model.state_dict(), "current_model.pt")
+                output_string = serialize_to_glsl(model, "f")
+
+                # Now load the template and replace <--FRAGMENT--> with our string
+                final_shader = ""
+
+                with open("template.glsl", "r") as f:
+                    template = f.read()
+                    final_shader = template.replace("<--FRAGMENT-->", output_string)
+                
+                with open("current_fragment.glsl", "w") as f:
+                    f.write(final_shader)
+
             lr = get_lr(optim)
             perm = torch.randperm(model_input.size(1))
             print("Step %d, Current loss %0.6f, lr %0.6f" % (step, loss, lr))
-            #scheduler.step()
 
-    return img_curr
+            if sched:
+                scheduler.step()
+
+    # Save the last model as well as the best, just in case
+    torch.save(model.state_dict(), "final_model.pt")
+    output_string = serialize_to_glsl(model, "f")
+
+    # Now load the template and replace <--FRAGMENT--> with our string
+    final_shader = ""
+
+    with open("template.glsl", "r") as f:
+        template = f.read()
+        final_shader = template.replace("<--FRAGMENT-->", output_string)
+    
+    with open("final_fragment.glsl", "w") as f:
+        f.write(final_shader)
+
+    return model
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SDF SIREN training")
     parser.add_argument("--obj", default="bunny2.obj")
     parser.add_argument("--steps", type=int, default=20000)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--samples", type=int, default=256 * 256 * 4)
+    parser.add_argument("--layers", type=int, default=2)
+    parser.add_argument("--features", type=int, default=16)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=0.001)
+    parser.add_argument("--decay-interval", type=int, default=5000)
+    parser.add_argument("--samples", type=int, default=262144)
+    parser.add_argument("--interval", type=int, default=100)
     parser.add_argument("--load", default="")
+    parser.add_argument("--omega", type=int, default=30)
+    parser.add_argument("--unit", dest="unit", action="store_true")
+    parser.add_argument("--batch-size", type=int, default=65535)
+    parser.add_argument("--sched", action="store_true")
     args = parser.parse_args()
 
-    sdf = SDFFitting(args.obj, args.samples)
+    sdf = SDFFitting(args.obj, args.samples, unit=True)
     sdfloader = DataLoader(sdf, batch_size=1, pin_memory=False, num_workers=0)
 
-    # Default is 16, 4, 15
+    # Default is 16, 2, 15
     sdf_siren = train_siren(
-        sdfloader, 16, 4, 15, total_steps=args.steps, learning_rate=args.lr, load_dict=args.load
+        sdfloader,
+        args.features,
+        args.layers,
+        args.omega,
+        total_steps=args.steps,
+        learning_rate=args.lr,
+        load_dict=args.load,
+        sched=args.sched,
+        interval=args.interval,
+        batch_size=args.batch_size,
+        decay_interval=args.decay_interval
     )
-
-    torch.save(sdf_siren.state_dict(), "latest_model.pt")
-    serialize_to_glsl(sdf_siren, "f")
