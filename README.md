@@ -15,7 +15,7 @@ Based on the following:
 * [https://www.shadertoy.com/view/wtVyWK](https://www.shadertoy.com/view/wtVyWK)
 * [https://www.youtube.com/watch?v=8pwXpfi-0bU](https://www.youtube.com/watch?v=8pwXpfi-0bU)
 * [https://drive.google.com/drive/folders/13-ks7iyLyI0vcS38xq1eeFdaMdfNlUC8](https://drive.google.com/drive/folders/13-ks7iyLyI0vcS38xq1eeFdaMdfNlUC8)
-*[https://pypi.org/project/mesh-to-sdf/](https://pypi.org/project/mesh-to-sdf/)
+* [https://pypi.org/project/mesh-to-sdf/](https://pypi.org/project/mesh-to-sdf/)
 
 This repository is mostly just a rehash of the excellent work done by [https://www.youtube.com/@suricrasia](Blackle Mori).
 
