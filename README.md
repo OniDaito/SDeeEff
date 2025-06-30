@@ -17,7 +17,7 @@ Based on the following:
 * [https://drive.google.com/drive/folders/13-ks7iyLyI0vcS38xq1eeFdaMdfNlUC8](https://drive.google.com/drive/folders/13-ks7iyLyI0vcS38xq1eeFdaMdfNlUC8)
 * [https://pypi.org/project/mesh-to-sdf/](https://pypi.org/project/mesh-to-sdf/)
 
-This repository is mostly just a rehash of the excellent work done by [https://www.youtube.com/@suricrasia](Blackle Mori).
+This repository is mostly just a rehash of the excellent work done by [Blackle](https://github.com/blackle).
 
 ## Requirements and setup
 
